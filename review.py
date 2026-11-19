@@ -145,6 +145,16 @@ def make_review(phone_request: str, data_agent, review_agent) -> str:
         return tool_result
     if not isinstance(records, list) or not records:
         return tool_result
+    normalized_request = " ".join(phone_request.casefold().split())
+    exact_matches = [
+        record for record in records
+        if " ".join(record.get("name", "").casefold().split()) == normalized_request
+    ]
+    if exact_matches:
+        # The lookup also returns broader token matches (for example, S25 Ultra
+        # when the requested model is S25). Prefer the exact stored model name.
+        records = [exact_matches[0]]
+        tool_result = json.dumps(records, default=str, ensure_ascii=False)
     if len(records) > 1:
         names = ", ".join(record["name"] for record in records)
         return f"I found multiple matches: {names}. Please specify which phone you mean."

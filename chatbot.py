@@ -11,15 +11,33 @@ import psycopg
 from dotenv import load_dotenv
 from google import genai
 
-SYSTEM_RULES = """You are a helpful Samsung phone assistant for an interview project.
+
+PHONE_COUNT_QUESTION = re.compile(
+    r"\bhow many\b.{0,60}\b(?:phones?|models?|records?)\b"
+    r"(?=.{0,80}\b(?:dataset|database|stored|available|there|do you have|in total)\b)"
+    r"|\b(?:number|count|total)(?:\s+of)?\s+(?:phones?|models?|records?)\b"
+    r"(?:.{0,60}\b(?:dataset|database|stored|available|there|in total)\b)?",
+    re.I,
+)
+
+
+def is_phone_count_question(question: str) -> bool:
+    """Return whether a question asks for the number of phones in the dataset."""
+    return bool(PHONE_COUNT_QUESTION.search(question))
+
+SYSTEM_RULES = """You are a helpful Samsung phone assistant for a project.
 Answer using ONLY the supplied PostgreSQL dataset. Do not use outside knowledge,
 search the web, or invent missing specifications, prices, or conclusions.
 The user may ask casually, use abbreviations, ask for comparisons, or refer to a
 phone from earlier in the conversation. Interpret their intent flexibly, but
-base every factual statement on the supplied records. For comparisons, compare
-only fields present for both models. If the dataset lacks a requested value,
-say that it is not available in this dataset. If a requested model is absent,
-say it is not in this dataset. Do not claim a phone is "best" unless you state
+base every factual statement on the supplied records. Resolve follow-up words
+such as "it" and "its" using the recent conversation. When the user asks to
+compare phones, explicitly discuss every requested phone; do not answer about
+only one. Show the same requested field for each phone side by side, then state
+the difference when the values use comparable units. For battery comparisons,
+distinguish capacity (mAh) from endurance (time), and compare like with like.
+If one phone or value is absent from the retrieved records, say that clearly
+instead of silently omitting it. Do not claim a phone is "best" unless you state
 the specific stored field used to make that comparison. For a vague "best
 camera" question, use the highest primary main-camera megapixel value as a
 limited dataset-based comparison when available, and clearly state that MP
@@ -55,6 +73,13 @@ def _read_phone_rows(database_url: str, query: str, params: tuple = ()) -> list[
 def load_phone_data(database_url: str) -> list[dict]:
     """Load all records, used for listing phones and checking dataset readiness."""
     return _read_phone_rows(database_url, PHONE_DATA_QUERY)
+
+
+def count_phones(database_url: str) -> int:
+    """Return the exact number of phone rows stored in PostgreSQL."""
+    with psycopg.connect(database_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM phones")
+        return cur.fetchone()[0]
 
 
 def retrieve_phone_data(database_url: str, question: str) -> list[dict]:
@@ -159,6 +184,7 @@ def main() -> int:
     if not phones:
         print("No phones found. Run the scraper before starting the chatbot.", file=sys.stderr)
         return 1
+    dataset_count = len(phones)
 
     client = genai.Client(api_key=api_key)
     history: list[tuple[str, str]] = []
@@ -172,6 +198,11 @@ def main() -> int:
         if question.lower() in {"exit", "quit"}:
             break
         if not question:
+            continue
+        if is_phone_count_question(question):
+            answer = f"There are {dataset_count} phones in the dataset."
+            print(f"Bot: {answer}\n")
+            history.append((question, answer))
             continue
         retrieval_question = f"{history[-1][0]} {question}" if history else question
         try:
