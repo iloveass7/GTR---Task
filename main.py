@@ -12,7 +12,7 @@ from fastapi.responses import PlainTextResponse
 from google import genai
 from pydantic import BaseModel, Field
 
-from chatbot import load_phone_data, make_prompt
+from chatbot import load_phone_data, make_prompt, retrieve_phone_data
 from review import create_agents, make_review
 
 load_dotenv()
@@ -89,7 +89,11 @@ def chat(request: ChatRequest) -> ChatResponse:
     if not api_key:
         raise HTTPException(status_code=503, detail="Gemini API key is not configured")
     try:
-        phones = load_phone_data(require_database_url())
+        database_url = require_database_url()
+        retrieval_question = request.message
+        if request.history:
+            retrieval_question = f"{request.history[-1].user} {request.message}"
+        phones = retrieve_phone_data(database_url, retrieval_question)
     except psycopg.Error as exc:
         raise HTTPException(status_code=503, detail="Could not read phone data from PostgreSQL") from exc
     if not phones:

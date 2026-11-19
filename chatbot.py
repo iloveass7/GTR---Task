@@ -27,8 +27,7 @@ alone does not establish overall photo quality. Be concise and name which
 phone each value belongs to."""
 
 
-def load_phone_data(database_url: str) -> list[dict]:
-    query = """
+PHONE_DATA_QUERY = """
         SELECT p.name, p.source_url,
                s.display_size, s.weight, s.dimensions, s.camera, s.battery,
                s.chipset, s.os, s.storage, s.raw_specs,
@@ -44,10 +43,71 @@ def load_phone_data(database_url: str) -> list[dict]:
         ) AS price ON TRUE
         ORDER BY p.name
     """
+
+
+def _read_phone_rows(database_url: str, query: str, params: tuple = ()) -> list[dict]:
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
-        cur.execute(query)
+        cur.execute(query, params)
         columns = [column.name for column in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def load_phone_data(database_url: str) -> list[dict]:
+    """Load all records, used for listing phones and checking dataset readiness."""
+    return _read_phone_rows(database_url, PHONE_DATA_QUERY)
+
+
+def retrieve_phone_data(database_url: str, question: str) -> list[dict]:
+    """Retrieve relevant phone records from PostgreSQL for a question.
+
+    Product model mentions take priority, so comparisons retrieve the named
+    phones. Otherwise PostgreSQL full-text search selects records matching the
+    question's content words. Broad or non-English questions fall back to the
+    full small dataset rather than silently dropping useful context.
+    """
+    stop_words = {
+        "a", "about", "an", "and", "are", "best", "does", "for", "from",
+        "how", "i", "is", "it", "me", "of", "on", "or", "please", "the",
+        "their", "them", "they", "to", "vs", "what", "which", "with",
+    }
+    words = list(dict.fromkeys(re.findall(r"[a-z0-9]+", question.lower())))
+    terms = [word for word in words if word not in stop_words and len(word) > 1]
+    model_mentions = re.findall(
+        r"\b((?:s|a|z|m|f)\d{1,2})(?:\s+(ultra|plus|fe|pro|lite|fold|flip))?\b",
+        question.lower(),
+    )
+
+    if model_mentions:
+        # Require a variant suffix when the user specified one; otherwise match
+        # the model family (for example, both S23 and S23 Ultra).
+        model_query = " | ".join(
+            " & ".join(part for part in mention if part)
+            for mention in model_mentions
+        )
+        query = PHONE_DATA_QUERY.replace(
+            "        ORDER BY p.name",
+            """        WHERE to_tsvector('simple', lower(p.name))
+                  @@ to_tsquery('simple', %s)
+        ORDER BY p.name""",
+        )
+        rows = _read_phone_rows(database_url, query, (model_query,))
+        if rows:
+            return rows
+
+    if not terms:
+        return load_phone_data(database_url)
+
+    search_query = " | ".join(terms)
+    query = PHONE_DATA_QUERY.replace(
+        "        ORDER BY p.name",
+        """        WHERE to_tsvector('simple', lower(concat_ws(' ',
+                    p.name, s.display_size, s.weight, s.dimensions, s.camera,
+                    s.battery, s.chipset, s.os, s.storage, s.raw_specs::text,
+                    price.price_text))) @@ to_tsquery('simple', %s)
+        ORDER BY p.name""",
+    )
+    rows = _read_phone_rows(database_url, query, (search_query,))
+    return rows or load_phone_data(database_url)
 
 
 def make_prompt(question: str, phones: list[dict], history: list[tuple[str, str]]) -> str:
@@ -72,7 +132,7 @@ def make_prompt(question: str, phones: list[dict], history: list[tuple[str, str]
         f"{role.upper()}: {message}" for pair in history for role, message in zip(("user", "assistant"), pair)
     )
     return (
-        f"{SYSTEM_RULES}\n\nDATASET (authoritative source):\n{dataset}\n\n"
+        f"{SYSTEM_RULES}\n\nRETRIEVED DATABASE RECORDS (authoritative source):\n{dataset}\n\n"
         + camera_hint
         + (f"RECENT CONVERSATION:\n{previous}\n\n" if previous else "")
         + f"USER QUESTION:\n{question}\n\nANSWER:"
@@ -113,7 +173,9 @@ def main() -> int:
             break
         if not question:
             continue
+        retrieval_question = f"{history[-1][0]} {question}" if history else question
         try:
+            phones = retrieve_phone_data(database_url, retrieval_question)
             response = client.models.generate_content(
                 model=model,
                 contents=make_prompt(question, phones, history[-4:]),

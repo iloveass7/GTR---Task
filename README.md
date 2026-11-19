@@ -6,7 +6,7 @@ A small interview project that collects Samsung phone specifications from GSMAre
 
 - Scrapes selected Samsung phone detail pages with `requests` and BeautifulSoup.
 - Stores phone names, specifications, and listed prices in PostgreSQL.
-- Answers natural-language questions from the saved dataset using Gemini.
+- Retrieves relevant phone records from PostgreSQL for natural-language questions, then uses Gemini to write a grounded answer.
 - Uses a LangChain data agent to retrieve a phone record and a separate review agent to write a review from it.
 - Provides an HTTP API for chat, reviews, phone listing, and a health check.
 
@@ -76,7 +76,7 @@ Add up to 15 unique phone URLs per run. Re-running a URL updates its phone and s
 python .\chatbot.py
 ```
 
-Ask questions in natural language, including comparisons and follow-ups. Type `exit` to quit. Gemini is instructed to use only the PostgreSQL records and say when a requested value is missing. The app sends the dataset to Gemini as context; it does not use vector search or web search.
+Ask questions in natural language, including comparisons and follow-ups. Type `exit` to quit. The chatbot uses retrieval-augmented generation (RAG): PostgreSQL full-text search retrieves relevant phone records, then Gemini answers using those records as context. Model-specific questions retrieve the named phone models; broad comparisons can retrieve the full small dataset. This structured-data approach does not use vector embeddings. Gemini is a hosted model, not an open-source model. The chatbot is instructed to use only the retrieved records and say when a requested value is missing. It does not use web search.
 
 ### LangChain review agents (Stage 3)
 

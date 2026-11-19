@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 BASE_HOST = "www.gsmarena.com"
-MAX_PHONES = 50
+MAX_PHONES = 15
 USER_AGENT = "SamsungPhoneResearchBot/1.0"
 ALLOWED_FIELDS = {
     "Dimensions": "dimensions",
